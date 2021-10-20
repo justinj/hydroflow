@@ -31,10 +31,16 @@ pub trait Writable<T> {
     #[allow(clippy::result_unit_err)]
     fn try_give(&mut self, item: T) -> Result<(), ()>;
 }
+
+// TODO(justin): document
+pub trait Joinable<T, O>: Writable<T> {
+    fn try_join(&mut self, other: &RefCell<O>);
+}
+
 /**
  * The read piece of a handoff.
  */
-pub trait Readable<T> {
+pub trait Readable<T>: Clone {
     fn try_get(&mut self) -> Option<T>;
 }
 /**
@@ -100,6 +106,17 @@ impl<T> Writable<T> for Rc<RefCell<VecDeque<T>>> {
         Ok(())
     }
 }
+impl<T> Joinable<T, VecDeque<T>> for Rc<RefCell<VecDeque<T>>> {
+    fn try_join(&mut self, other: &RefCell<VecDeque<T>>) {
+        let mut d = (*self).borrow_mut();
+        if d.is_empty() {
+            drop(d);
+            self.swap(&other)
+        } else {
+            d.extend(other.borrow_mut().drain(..))
+        }
+    }
+}
 impl<T> Readable<T> for Rc<RefCell<VecDeque<T>>> {
     fn try_get(&mut self) -> Option<T> {
         self.borrow_mut().pop_front()
@@ -115,7 +132,8 @@ impl<T> HandoffMeta for Rc<RefCell<VecDeque<T>>> {
  * Context provided to a compiled component for writing to an [OutputPort].
  */
 pub struct SendCtx<H: Handoff> {
-    once: util::Once<H::Writable>,
+    // TODO(justin): figure out a nice way to make this not-private.
+    pub once: util::Once<H::Writable>,
 }
 impl<H: Handoff> SendCtx<H> {
     // TODO: represent backpressure in this return value.
@@ -137,14 +155,19 @@ pub struct OutputPort<H: Handoff> {
  * Context provided to a compiled component for reading from an [InputPort].
  */
 pub struct RecvCtx<H: Handoff> {
-    handoff: Rc<RefCell<H::Readable>>,
+    handoff: H::Readable,
+}
+impl<H: Handoff> RecvCtx<H> {
+    pub fn get_handoff(&mut self) -> H::Readable {
+        self.handoff.clone()
+    }
 }
 impl<T> Iterator for &RecvCtx<VecHandoff<T>> {
     type Item = T;
 
     fn next(&mut self) -> Option<Self::Item> {
         // TODOTOTODOTOTODTOO !!!!!!!! TODO
-        self.handoff.borrow_mut().borrow_mut().pop_front()
+        self.handoff.borrow_mut().pop_front()
     }
 }
 
@@ -195,9 +218,7 @@ where
     fn make_input() -> (Self::RecvCtx, Self::InputPort, Self::Meta) {
         let (read_side, write_side, meta) = H::new();
 
-        let recv = RecvCtx {
-            handoff: Rc::new(RefCell::new(read_side)),
-        };
+        let recv = RecvCtx { handoff: read_side };
         let input = InputPort {
             handoff: write_side,
         };

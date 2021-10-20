@@ -1,5 +1,7 @@
+use std::{cell::RefCell, collections::VecDeque, rc::Rc};
+
 use criterion::{black_box, criterion_group, criterion_main, Criterion};
-use hydroflow::{Hydroflow, RecvCtx, SendCtx, VecHandoff};
+use hydroflow::{Hydroflow, Joinable, RecvCtx, SendCtx, VecHandoff};
 
 const NUM_OPS: usize = 20;
 const NUM_INTS: usize = 1_000_000;
@@ -19,11 +21,13 @@ fn benchmark_identity(c: &mut Criterion) {
                 }
             });
             for _ in 0..NUM_OPS {
-                let (next_in, mut next_out) = df.add_inout(|recv, send| {
-                    for x in &*recv {
-                        send.try_give(x).unwrap();
-                    }
-                });
+                let data = RefCell::new(VecDeque::new());
+                let (next_in, mut next_out) =
+                    df.add_inout(move |recv, send: &mut SendCtx<VecHandoff<usize>>| {
+                        let handoff: Rc<RefCell<VecDeque<usize>>> = recv.get_handoff();
+                        handoff.swap(&data);
+                        send.once.get().try_join(&data);
+                    });
 
                 std::mem::swap(&mut it, &mut next_out);
                 df.add_edge(next_out, next_in);
