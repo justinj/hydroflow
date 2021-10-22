@@ -12,10 +12,10 @@ use sealed::sealed;
 use slotmap::SlotMap;
 pub use tuple_list::tuple_list as tl;
 
+use handoff::DequeHandoff;
 use handoff::Handoff;
 use handoff::HandoffMeta;
 use handoff::NullHandoff;
-use handoff::VecHandoff;
 use handoff::{CanReceive, TryCanReceive};
 
 pub type OpId = slotmap::DefaultKey;
@@ -63,7 +63,7 @@ pub struct OutputPort<H: Handoff> {
 pub struct RecvCtx<H: Handoff> {
     handoff: Rc<RefCell<H>>,
 }
-impl<T> IntoIterator for &RecvCtx<VecHandoff<T>> {
+impl<T> IntoIterator for &RecvCtx<DequeHandoff<T>> {
     type Item = T;
     type IntoIter = std::collections::vec_deque::IntoIter<T>;
 
@@ -493,7 +493,7 @@ fn map_filter() {
     });
 
     let (map_in, map_out) = df.add_inout(
-        |recv: &mut RecvCtx<VecHandoff<i32>>, send: &mut SendCtx<VecHandoff<_>>| {
+        |recv: &mut RecvCtx<DequeHandoff<i32>>, send: &mut SendCtx<DequeHandoff<_>>| {
             for x in &*recv {
                 send.give(Some(3 * x + 1));
             }
@@ -501,7 +501,7 @@ fn map_filter() {
     );
 
     let (filter_in, filter_out) = df.add_inout(
-        |recv: &mut RecvCtx<VecHandoff<i32>>, send: &mut SendCtx<VecHandoff<_>>| {
+        |recv: &mut RecvCtx<DequeHandoff<i32>>, send: &mut SendCtx<DequeHandoff<_>>| {
             for x in &*recv {
                 if x % 2 == 0 {
                     send.give(Some(x));
@@ -535,7 +535,7 @@ mod tests {
         rc::Rc,
     };
 
-    use crate::{Hydroflow, RecvCtx, SendCtx, VecHandoff};
+    use crate::{DequeHandoff, Hydroflow, RecvCtx, SendCtx};
 
     #[test]
     fn test_cycle() {
@@ -558,7 +558,7 @@ mod tests {
         let mut df = Hydroflow::new();
 
         let mut initially_reachable = vec![1];
-        let reachable = df.add_source(move |send: &mut SendCtx<VecHandoff<usize>>| {
+        let reachable = df.add_source(move |send: &mut SendCtx<DequeHandoff<usize>>| {
             for v in initially_reachable.drain(..) {
                 send.give(Some(v));
             }
@@ -566,7 +566,8 @@ mod tests {
 
         let mut seen = HashSet::new();
         let (distinct_in, distinct_out) = df.add_inout(
-            move |recv: &mut RecvCtx<VecHandoff<usize>>, send: &mut SendCtx<VecHandoff<usize>>| {
+            move |recv: &mut RecvCtx<DequeHandoff<usize>>,
+                  send: &mut SendCtx<DequeHandoff<usize>>| {
                 for v in &*recv {
                     if seen.insert(v) {
                         send.give(Some(v));
@@ -576,7 +577,7 @@ mod tests {
         );
 
         let (merge_lhs, merge_rhs, merge_out) =
-            df.add_binary(|recv1, recv2, send: &mut SendCtx<VecHandoff<usize>>| {
+            df.add_binary(|recv1, recv2, send: &mut SendCtx<DequeHandoff<usize>>| {
                 for v in (recv1.into_iter()).chain(recv2.into_iter()) {
                     send.give(Some(v));
                 }
@@ -593,9 +594,9 @@ mod tests {
         });
 
         let (tee_in, tee_out1, tee_out2) = df.add_binary_out(
-            |recv: &mut RecvCtx<VecHandoff<usize>>,
-             send1: &mut SendCtx<VecHandoff<usize>>,
-             send2: &mut SendCtx<VecHandoff<usize>>| {
+            |recv: &mut RecvCtx<DequeHandoff<usize>>,
+             send1: &mut SendCtx<DequeHandoff<usize>>,
+             send2: &mut SendCtx<DequeHandoff<usize>>| {
                 for v in &*recv {
                     send1.give(Some(v));
                     send2.give(Some(v));

@@ -1,7 +1,7 @@
 use babyflow::babyflow::Query;
 use criterion::{black_box, criterion_group, criterion_main, Criterion};
 use hydroflow::query::Query as Q;
-use hydroflow::{collections::Iter, handoff::VecHandoff, Hydroflow, SendCtx};
+use hydroflow::{collections::Iter, handoff::DequeHandoff, Hydroflow, SendCtx};
 use timely::dataflow::operators::{Concatenate, Filter, Inspect, ToStream};
 
 const NUM_OPS: usize = 20;
@@ -14,7 +14,7 @@ fn benchmark_hydroflow(c: &mut Criterion) {
             let mut df = Hydroflow::new();
 
             let mut sent = false;
-            let source = df.add_source(move |send: &mut SendCtx<VecHandoff<_>>| {
+            let source = df.add_source(move |send: &mut SendCtx<DequeHandoff<_>>| {
                 if !sent {
                     sent = true;
                     send.give(Iter(0..NUM_INTS));
@@ -22,7 +22,9 @@ fn benchmark_hydroflow(c: &mut Criterion) {
             });
 
             let (tee_in, mut out1, mut out2) = df.add_binary_out(
-                |recv, send1: &mut SendCtx<VecHandoff<_>>, send2: &mut SendCtx<VecHandoff<_>>| {
+                |recv,
+                 send1: &mut SendCtx<DequeHandoff<_>>,
+                 send2: &mut SendCtx<DequeHandoff<_>>| {
                     for v in recv.into_iter() {
                         if v % 2 == 0 {
                             send1.give(Some(v));

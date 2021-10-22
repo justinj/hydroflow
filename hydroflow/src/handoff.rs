@@ -34,15 +34,15 @@ impl Handoff for NullHandoff {}
 /**
  * A [VecDeque]-based FIFO handoff.
  */
-pub struct VecHandoff<T>(pub(crate) VecDeque<T>);
-impl<T> Default for VecHandoff<T> {
+pub struct DequeHandoff<T>(pub(crate) VecDeque<T>);
+impl<T> Default for DequeHandoff<T> {
     fn default() -> Self {
         Self(Default::default())
     }
 }
-impl<T> Handoff for VecHandoff<T> {}
+impl<T> Handoff for DequeHandoff<T> {}
 
-impl<T> CanReceive<Option<T>> for VecHandoff<T> {
+impl<T> CanReceive<Option<T>> for DequeHandoff<T> {
     fn give(&mut self, mut item: Option<T>) -> Option<T> {
         if let Some(item) = item.take() {
             self.0.push_back(item)
@@ -50,7 +50,7 @@ impl<T> CanReceive<Option<T>> for VecHandoff<T> {
         None
     }
 }
-impl<T, I> CanReceive<Iter<I>> for VecHandoff<T>
+impl<T, I> CanReceive<Iter<I>> for DequeHandoff<T>
 where
     I: Iterator<Item = T>,
 {
@@ -59,7 +59,7 @@ where
         iter
     }
 }
-impl<T> CanReceive<VecDeque<T>> for VecHandoff<T> {
+impl<T> CanReceive<VecDeque<T>> for DequeHandoff<T> {
     fn give(&mut self, mut vec: VecDeque<T>) -> VecDeque<T> {
         self.0.extend(vec.drain(..));
         vec
@@ -136,7 +136,7 @@ impl HandoffMeta for NullHandoff {
 //     }
 // }
 
-impl<T> HandoffMeta for VecHandoff<T> {
+impl<T> HandoffMeta for DequeHandoff<T> {
     fn is_bottom(&self) -> bool {
         self.0.is_empty()
     }

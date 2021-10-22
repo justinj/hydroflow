@@ -1,6 +1,6 @@
 use std::{cell::RefCell, rc::Rc};
 
-use crate::{collections::Iter, handoff::VecHandoff, Hydroflow, OutputPort, RecvCtx, SendCtx};
+use crate::{collections::Iter, handoff::DequeHandoff, Hydroflow, OutputPort, RecvCtx, SendCtx};
 
 pub struct Query {
     df: Rc<RefCell<Hydroflow>>,
@@ -16,7 +16,7 @@ impl Query {
     pub fn source<F, T>(&mut self, f: F) -> Operator<T>
     where
         T: 'static,
-        F: 'static + FnMut(&mut SendCtx<VecHandoff<T>>),
+        F: 'static + FnMut(&mut SendCtx<DequeHandoff<T>>),
     {
         let output_port = (*self.df).borrow_mut().add_source(f);
         Operator {
@@ -54,7 +54,7 @@ impl Query {
 
 pub struct Operator<T> {
     df: Rc<RefCell<Hydroflow>>,
-    output_port: OutputPort<VecHandoff<T>>,
+    output_port: OutputPort<DequeHandoff<T>>,
 }
 
 impl<T> Operator<T>
@@ -132,7 +132,7 @@ impl<T: Clone> Operator<T> {
         let (inputs, outputs) = (*self.df).borrow_mut().add_n_in_m_out(
             1,
             n,
-            move |recvs: &mut [RecvCtx<VecHandoff<T>>], sends| {
+            move |recvs: &mut [RecvCtx<DequeHandoff<T>>], sends| {
                 // TODO(justin): optimize this (extra clone, etc.).
                 for v in recvs.into_iter().next().unwrap().into_iter() {
                     for s in &mut *sends {

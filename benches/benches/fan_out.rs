@@ -16,7 +16,7 @@ fn benchmark_hydroflow(c: &mut Criterion) {
             });
 
             for op in source.tee(NUM_OPS) {
-                let _ = op.sink(|x| {
+                op.sink(|x| {
                     black_box(x);
                 });
             }
