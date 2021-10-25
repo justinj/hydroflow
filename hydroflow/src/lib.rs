@@ -54,7 +54,7 @@ impl<H: Handoff> SendCtx<H> {
  */
 #[must_use]
 pub struct OutputPort<H: Handoff> {
-    once: util::SendOnce<Rc<RefCell<H>>>,
+    handoff: Rc<RefCell<H>>,
 }
 
 /**
@@ -89,7 +89,7 @@ impl<T> IntoIterator for &RecvCtx<DequeHandoff<T>> {
 // TODO: figure out how to explain succinctly why this and output port both use Writable
 #[must_use]
 pub struct InputPort<H: Handoff> {
-    handoff: Rc<RefCell<H>>,
+    handoff: Rc<RefCell<Option<H>>>,
 }
 
 /**
