@@ -150,3 +150,104 @@ where
         self.borrow().is_bottom()
     }
 }
+
+struct ReaderHandoff<T> {
+    contents: VecDeque<Vec<T>>,
+    empties: Vec<Vec<T>>,
+}
+
+impl<T> Default for ReaderHandoff<T> {
+    fn default() -> Self {
+        Self {
+            contents: Default::default(),
+            empties: Default::default(),
+        }
+    }
+}
+
+impl<T> ReaderHandoff<T> {
+    fn give(&mut self, mut v: &mut Vec<T>) {
+        match self.empties.pop() {
+            None => {
+                self.contents.push_back(std::mem::take(v));
+            }
+            Some(mut empty) => {
+                std::mem::swap(&mut empty, v);
+                self.contents.push_back(empty);
+            }
+        }
+    }
+
+    pub fn for_each<F>(&mut self, mut f: F)
+    where
+        F: FnMut(&mut Vec<T>),
+    {
+        for mut batch in self.contents.drain(..) {
+            f(&mut batch);
+            assert!(batch.is_empty());
+            self.empties.push(batch);
+        }
+    }
+}
+
+// Shamelessly cribbed this design from Timely.
+struct TeeingHandoff<T> {
+    contents: Vec<T>,
+    buffer: Vec<T>,
+    listeners: Vec<Rc<RefCell<ReaderHandoff<T>>>>,
+}
+
+impl<T> Default for TeeingHandoff<T> {
+    fn default() -> Self {
+        TeeingHandoff {
+            contents: Vec::with_capacity(1024),
+            buffer: Vec::with_capacity(1024),
+            listeners: Vec::new(),
+        }
+    }
+}
+
+impl<T: Clone> TeeingHandoff<T> {
+    fn flush(&mut self) {
+        if !self.contents.is_empty() {
+            for i in 1..self.listeners.len() {
+                self.buffer.extend_from_slice(&self.contents);
+                (*self.listeners[i]).borrow_mut().give(&mut self.buffer);
+            }
+            if !self.listeners.is_empty() {
+                (*self.listeners[0]).borrow_mut().give(&mut self.contents);
+            }
+        }
+    }
+
+    pub fn give(&mut self, t: T) {
+        self.contents.push(t);
+        if self.contents.len() >= self.buffer.capacity() {
+            self.flush();
+        }
+    }
+
+    pub fn give_vec(&mut self, v: &mut Vec<T>) {
+        self.flush();
+        std::mem::swap(v, &mut self.contents);
+        self.flush();
+    }
+
+    fn subscribe(&mut self) -> Rc<RefCell<ReaderHandoff<T>>> {
+        let h = Rc::new(RefCell::new(ReaderHandoff::default()));
+        self.listeners.push(h.clone());
+        h
+    }
+}
+
+// impl<T> HandoffMeta for BufferedHandoff<T> {
+//     fn is_bottom(&self) -> bool {
+//         self.contents.is_empty()
+//     }
+// }
+
+// impl<T> Handoff for BufferedHandoff<T> {}
+
+// impl<T: Clone> BufferedHandoff {
+//     fn give() {}
+// }
