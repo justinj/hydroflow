@@ -20,6 +20,7 @@ use std::pin::Pin;
 use std::rc::Rc;
 use std::sync::mpsc::{self, Receiver, RecvError, SyncSender, TrySendError};
 use std::task::{self, Poll};
+use std::time::Duration;
 
 use futures::stream::Stream;
 use ref_cast::RefCast;
@@ -1104,21 +1105,52 @@ fn test_input_channel() {
 fn test_names() {
     use self::collections::Iter;
 
-    let mut df = Hydroflow::new();
+    std::thread::spawn(|| {
+        let rt = tokio::runtime::Runtime::new().unwrap();
+        rt.block_on(async move {
+            let mut df = Hydroflow::new();
 
-    let mut data = vec![1, 2, 3];
-    let output = df.add_source(move |_ctx, send: &SendCtx<VecHandoff<usize>>| {
-        send.give(Iter(data.drain(..)));
+            // TODO(justin): get the OS to allocate a port.
+            let (net_input, net_output) = df.bind_one(26258).await;
+            println!("first connected");
+
+            let sink_input = df.add_sink(move |_ctx, recv: &RecvCtx<VecHandoff<net::Message>>| {});
+
+            let mut data = vec![1_usize, 2, 3];
+            let output = df.add_source(move |_ctx, send: &SendCtx<VecHandoff<net::Message>>| {
+                send.give(Iter(data.drain(..).map(|i| net::Message::Data {
+                    address: 0,
+                    batch: bytes::Bytes::from_iter(i.to_le_bytes().into_iter()),
+                })));
+            });
+            df.add_edge(output, net_input);
+            df.add_edge(net_output, sink_input);
+
+            df.run_async().await.unwrap();
+        });
     });
-    let input = df.add_named_sink("printer", move |_ctx, recv: &RecvCtx<VecHandoff<usize>>| {
-        for _v in recv.take_inner() {
-            // println!("{}", v);
-        }
+
+    std::thread::spawn(|| {
+        let rt = tokio::runtime::Runtime::new().unwrap();
+        rt.block_on(async move {
+            let mut df = Hydroflow::new();
+
+            // TODO(justin): use port that was assigned by OS to the other thread
+            let (net_input, net_output) = df.connect("localhost:26258").await;
+            println!("second connected");
+
+            let output = df.add_source(move |_ctx, send: &SendCtx<VecHandoff<net::Message>>| {});
+            df.add_edge(output, net_input);
+
+            let sink_input = df.add_sink(move |_ctx, recv: &RecvCtx<VecHandoff<net::Message>>| {
+                for v in recv.take_inner() {
+                    println!("{:?}", v);
+                }
+            });
+            df.add_edge(net_output, sink_input);
+            df.run_async().await.unwrap();
+        });
     });
-    df.add_edge(output, input);
 
-    df.tick();
-
-    let id = df.subgraph_id_from_name("printer");
-    assert_eq!(id, Some(1));
+    std::thread::sleep(Duration::from_millis(1000));
 }
