@@ -54,10 +54,11 @@ pub struct Hydroflow {
     event_queue_recv: Receiver<SubgraphId>,
 
     name_map: HashMap<String, SubgraphId>,
+    ingress_points: HashMap<String, VecHandoff<net::Message>>,
 }
 impl Default for Hydroflow {
     fn default() -> Self {
-        let (subgraphs, handoffs, states, ready_queue, name_map) = Default::default();
+        let (subgraphs, handoffs, states, ready_queue, name_map, ingress_points) = Default::default();
         let (event_queue_send, event_queue_recv) = mpsc::sync_channel(8_000);
         Self {
             subgraphs,
@@ -67,6 +68,7 @@ impl Default for Hydroflow {
             event_queue_send,
             event_queue_recv,
             name_map,
+            ingress_points,
         }
     }
 }
@@ -576,6 +578,19 @@ impl Hydroflow {
         StateHandle {
             state_id,
             _phantom: PhantomData,
+        }
+    }
+
+    // TODO(justin): generalize this over other handoff types.
+    pub fn add_ingress_point(&mut self, name: &str, input_port: InputPort<VecHandoff<net::Message>>) {
+        match self.ingress_points.get(name) {
+            Some(_) => {
+                // TODO(justin): return error
+                panic!("repeated ingress point name {:?}", name)
+            }
+            None => {
+                let handoff = VecHandoff<net::Message>::default();
+            }
         }
     }
 }
@@ -1105,13 +1120,42 @@ fn test_input_channel() {
 fn test_names() {
     use self::collections::Iter;
 
+    // RECEIVER
+    std::thread::spawn(|| {
+        let rt = tokio::runtime::Runtime::new().unwrap();
+        rt.block_on(async move {
+            let mut df = Hydroflow::new_with_name("receiver");
+
+            // TODO(justin): use port that was assigned by OS to the other thread
+            // let (net_input, net_output) = df.bind_one(26258).await;
+            let my_uuid = df.listen_on(26258).await;
+            // println!("second connected");
+
+            // let output = df.add_source(move |_ctx, send: &SendCtx<VecHandoff<net::Message>>| {});
+
+            // df.add_edge(output, net_input);
+
+            let sink_input = df.add_sink(move |_ctx, recv: &RecvCtx<VecHandoff<net::Message>>| {
+                for v in recv.take_inner() {
+                    println!("{:?}", v);
+                }
+            });
+
+            df.add_ingress_point("printer", sink_input);
+
+            df.run_async().await.unwrap();
+        });
+    });
+
+    // SENDER
     std::thread::spawn(|| {
         let rt = tokio::runtime::Runtime::new().unwrap();
         rt.block_on(async move {
             let mut df = Hydroflow::new();
 
             // TODO(justin): get the OS to allocate a port.
-            let (net_input, net_output) = df.bind_one(26258).await;
+            // let (net_input, net_output) = df.connect("localhost:26258").await;
+
             println!("first connected");
 
             let sink_input = df.add_sink(move |_ctx, recv: &RecvCtx<VecHandoff<net::Message>>| {});
@@ -1123,31 +1167,11 @@ fn test_names() {
                     batch: bytes::Bytes::from_iter(i.to_le_bytes().into_iter()),
                 })));
             });
-            df.add_edge(output, net_input);
-            df.add_edge(net_output, sink_input);
+            // df.add_edge(output, net_input);
+            // df.add_edge(net_output, sink_input);
 
-            df.run_async().await.unwrap();
-        });
-    });
+            df.add_remote_edge(output, Remote::new(vec!["localhost:26258", "printer"]));
 
-    std::thread::spawn(|| {
-        let rt = tokio::runtime::Runtime::new().unwrap();
-        rt.block_on(async move {
-            let mut df = Hydroflow::new();
-
-            // TODO(justin): use port that was assigned by OS to the other thread
-            let (net_input, net_output) = df.connect("localhost:26258").await;
-            println!("second connected");
-
-            let output = df.add_source(move |_ctx, send: &SendCtx<VecHandoff<net::Message>>| {});
-            df.add_edge(output, net_input);
-
-            let sink_input = df.add_sink(move |_ctx, recv: &RecvCtx<VecHandoff<net::Message>>| {
-                for v in recv.take_inner() {
-                    println!("{:?}", v);
-                }
-            });
-            df.add_edge(net_output, sink_input);
             df.run_async().await.unwrap();
         });
     });
