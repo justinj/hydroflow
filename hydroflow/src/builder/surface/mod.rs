@@ -29,6 +29,7 @@ pub mod pull_cross_join;
 pub mod pull_handoff;
 pub mod pull_iter;
 pub mod pull_join;
+pub mod pull_stream_join;
 
 pub mod push_for_each;
 pub mod push_handoff;
@@ -158,6 +159,24 @@ pub trait PullSurface: BaseSurface {
             + PortListSplit<RECV, Self::InputHandoffs, Suffix = Other::InputHandoffs>,
     {
         pull_batch::BatchPullSurface::new(self, other)
+    }
+
+    fn stream_join<Other, Key, ValSelf, ValOther>(
+        self,
+        other: Other,
+    ) -> pull_stream_join::StreamJoinPullSurface<Self, Other>
+    where
+        Self: Sized + PullSurface<ItemOut = (Key, ValSelf)>,
+        Other: PullSurface<ItemOut = (Key, ValOther)>,
+        Key: 'static + Eq + Hash + Clone,
+        ValSelf: 'static + Clone,
+        ValOther: 'static + Clone,
+
+        Self::InputHandoffs: Extend<Other::InputHandoffs>,
+        <Self::InputHandoffs as Extend<Other::InputHandoffs>>::Extended: PortList<RECV>
+            + PortListSplit<RECV, Self::InputHandoffs, Suffix = Other::InputHandoffs>,
+    {
+        pull_stream_join::StreamJoinPullSurface::new(self, other)
     }
 
     fn cross_join<Other>(self, other: Other) -> pull_cross_join::CrossJoinPullSurface<Self, Other>

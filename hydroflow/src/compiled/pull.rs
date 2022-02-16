@@ -2,6 +2,84 @@ use std::collections::HashMap;
 use std::ops::Range;
 
 #[derive(Debug)]
+pub struct StreamJoinState<K, BufV, StreamV> {
+    cur_stream_val: Option<(K, StreamV)>,
+    // TODO(justin): we could maybe do something fancier here, like keep an
+    // index into the set of values since we know we won't have anyone else try
+    // to read or write it while we're emitting values, but keep it simple for
+    // now.
+    buf: Vec<BufV>,
+    tab: HashMap<K, Vec<BufV>>,
+}
+
+impl<K, BufV, StreamV> Default for StreamJoinState<K, BufV, StreamV> {
+    fn default() -> Self {
+        Self {
+            cur_stream_val: None,
+            buf: Vec::new(),
+            tab: HashMap::new(),
+        }
+    }
+}
+
+pub struct StreamJoin<'a, K, Buf, BufV, Stream, StreamV>
+where
+    K: Eq + std::hash::Hash,
+    Buf: Iterator<Item = (K, BufV)>,
+    Stream: Iterator<Item = (K, StreamV)>,
+{
+    buf: Buf,
+    stream: Stream,
+    state: &'a mut StreamJoinState<K, BufV, StreamV>,
+}
+
+impl<'a, K, Buf, BufV, Stream, StreamV> Iterator for StreamJoin<'a, K, Buf, BufV, Stream, StreamV>
+where
+    K: Eq + std::hash::Hash + Clone,
+    BufV: Clone,
+    StreamV: Clone,
+    Buf: Iterator<Item = (K, BufV)>,
+    Stream: Iterator<Item = (K, StreamV)>,
+{
+    type Item = (K, StreamV, BufV);
+
+    fn next(&mut self) -> Option<Self::Item> {
+        loop {
+            if let Some(buf_v) = self.state.buf.pop() {
+                let (k, stream_v) = self.state.cur_stream_val.clone().unwrap();
+                return Some((k, stream_v, buf_v));
+            }
+
+            // TODO(justin): reuse this last value.
+            self.state.cur_stream_val = None;
+
+            for (k, v) in &mut self.buf {
+                self.state.tab.entry(k).or_insert_with(Vec::new).push(v);
+            }
+
+            for (k, v) in &mut self.stream {
+                if let Some(vals) = self.state.tab.get(&k) {
+                    self.state.cur_stream_val = Some((k, v));
+                    self.state.buf = vals.clone();
+                    break;
+                }
+            }
+            self.state.cur_stream_val.as_ref()?;
+        }
+    }
+}
+impl<'a, K, Buf, BufV, Stream, StreamV> StreamJoin<'a, K, Buf, BufV, Stream, StreamV>
+where
+    K: Eq + std::hash::Hash,
+    Buf: Iterator<Item = (K, BufV)>,
+    Stream: Iterator<Item = (K, StreamV)>,
+{
+    pub fn new(buf: Buf, stream: Stream, state: &'a mut StreamJoinState<K, BufV, StreamV>) -> Self {
+        Self { buf, stream, state }
+    }
+}
+
+#[derive(Debug)]
 pub struct BatchJoinState<K, BufV> {
     tab: HashMap<K, Vec<BufV>>,
 }

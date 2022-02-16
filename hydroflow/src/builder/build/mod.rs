@@ -10,6 +10,7 @@ pub mod pull_handoff;
 pub mod pull_iter;
 pub mod pull_join;
 pub mod pull_map;
+pub mod pull_stream_join;
 
 pub mod push_filter;
 pub mod push_filter_map;
