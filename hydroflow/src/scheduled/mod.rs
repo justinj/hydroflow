@@ -58,25 +58,25 @@ mod tests {
         ticks_input.flush();
 
         df.tick();
-        assert_eq!(vec![(1, vec![1, 2, 3])], *outputs.borrow());
+        assert_eq!(vec![(vec![1, 2, 3], 1)], *outputs.borrow());
 
         ticks_input.give(Some(2));
         ticks_input.flush();
 
         df.tick();
-        assert_eq!(vec![(1, vec![1, 2, 3])], *outputs.borrow());
+        assert_eq!(vec![(vec![1, 2, 3], 1)], *outputs.borrow());
 
         stream_input.give(Some(4));
         stream_input.give(Some(5));
         stream_input.flush();
 
         df.tick();
-        assert_eq!(vec![(1, vec![1, 2, 3])], *outputs.borrow());
+        assert_eq!(vec![(vec![1, 2, 3], 1)], *outputs.borrow());
 
         ticks_input.give(Some(3));
         ticks_input.flush();
 
         df.tick();
-        assert_eq!(vec![(1, vec![1, 2, 3]), (3, vec![4, 5])], *outputs.borrow());
+        assert_eq!(vec![(vec![1, 2, 3], 1), (vec![4, 5], 3)], *outputs.borrow());
     }
 }

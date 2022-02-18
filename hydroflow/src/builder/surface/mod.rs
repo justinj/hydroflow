@@ -172,9 +172,9 @@ pub trait PullSurface: BaseSurface {
         ValSelf: 'static + Clone,
         ValOther: 'static + Clone,
 
-        Self::InputHandoffs: Extend<Other::InputHandoffs>,
-        <Self::InputHandoffs as Extend<Other::InputHandoffs>>::Extended: PortList<RECV>
-            + PortListSplit<RECV, Self::InputHandoffs, Suffix = Other::InputHandoffs>,
+        Other::InputHandoffs: Extend<Self::InputHandoffs>,
+        <Other::InputHandoffs as Extend<Self::InputHandoffs>>::Extended: PortList<RECV>
+            + PortListSplit<RECV, Other::InputHandoffs, Suffix = Self::InputHandoffs>,
     {
         pull_stream_join::StreamJoinPullSurface::new(self, other)
     }

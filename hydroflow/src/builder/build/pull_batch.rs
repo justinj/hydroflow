@@ -59,7 +59,7 @@ where
     <PrevBuf::InputHandoffs as Extend<PrevStream::InputHandoffs>>::Extended: PortList<RECV>
         + PortListSplit<RECV, PrevBuf::InputHandoffs, Suffix = PrevStream::InputHandoffs>,
 {
-    type ItemOut = (Key, StreamVal, Vec<BufVal>);
+    type ItemOut = (Key, Vec<BufVal>, StreamVal);
     type Build<'slf, 'hof> = BatchJoin<
         'slf,
         Key,

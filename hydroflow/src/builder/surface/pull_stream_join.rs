@@ -7,7 +7,7 @@ use crate::scheduled::handoff::handoff_list::{PortList, PortListSplit};
 use crate::scheduled::port::RECV;
 use crate::scheduled::type_list::Extend;
 
-pub struct StreamJoinPullSurface<PrevBuf, PrevStream>
+pub struct StreamJoinPullSurface<PrevStream, PrevBuf>
 where
     PrevBuf: PullSurface,
     PrevStream: PullSurface,
@@ -16,10 +16,10 @@ where
     <PrevBuf::InputHandoffs as Extend<PrevStream::InputHandoffs>>::Extended: PortList<RECV>
         + PortListSplit<RECV, PrevBuf::InputHandoffs, Suffix = PrevStream::InputHandoffs>,
 {
-    prev_buf: PrevBuf,
     prev_stream: PrevStream,
+    prev_buf: PrevBuf,
 }
-impl<PrevBuf, PrevStream, Key, BufVal, StreamVal> StreamJoinPullSurface<PrevBuf, PrevStream>
+impl<PrevBuf, PrevStream, Key, BufVal, StreamVal> StreamJoinPullSurface<PrevStream, PrevBuf>
 where
     PrevBuf: PullSurface<ItemOut = (Key, BufVal)>,
     PrevStream: PullSurface<ItemOut = (Key, StreamVal)>,
@@ -31,16 +31,16 @@ where
     <PrevBuf::InputHandoffs as Extend<PrevStream::InputHandoffs>>::Extended: PortList<RECV>
         + PortListSplit<RECV, PrevBuf::InputHandoffs, Suffix = PrevStream::InputHandoffs>,
 {
-    pub fn new(prev_buf: PrevBuf, prev_stream: PrevStream) -> Self {
+    pub fn new(prev_stream: PrevStream, prev_buf: PrevBuf) -> Self {
         Self {
-            prev_buf,
             prev_stream,
+            prev_buf,
         }
     }
 }
 
 impl<PrevBuf, PrevStream, Key, BufVal, StreamVal> BaseSurface
-    for StreamJoinPullSurface<PrevBuf, PrevStream>
+    for StreamJoinPullSurface<PrevStream, PrevBuf>
 where
     PrevBuf: PullSurface<ItemOut = (Key, BufVal)>,
     PrevStream: PullSurface<ItemOut = (Key, StreamVal)>,
@@ -56,7 +56,7 @@ where
 }
 
 impl<PrevBuf, PrevStream, Key, BufVal, StreamVal> PullSurface
-    for StreamJoinPullSurface<PrevBuf, PrevStream>
+    for StreamJoinPullSurface<PrevStream, PrevBuf>
 where
     PrevBuf: PullSurface<ItemOut = (Key, BufVal)>,
     PrevStream: PullSurface<ItemOut = (Key, StreamVal)>,

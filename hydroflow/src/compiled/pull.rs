@@ -109,7 +109,7 @@ where
     Buf: Iterator<Item = (K, BufV)>,
     Stream: Iterator<Item = (K, StreamV)>,
 {
-    type Item = (K, StreamV, Vec<BufV>);
+    type Item = (K, Vec<BufV>, StreamV);
 
     fn next(&mut self) -> Option<Self::Item> {
         for (k, v) in &mut self.buf {
@@ -118,7 +118,7 @@ where
 
         for (k, v) in &mut self.stream {
             if let Some(vals) = self.state.tab.remove(&k) {
-                return Some((k, v, vals));
+                return Some((k, vals, v));
             }
         }
         None
