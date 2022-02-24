@@ -161,16 +161,18 @@ pub trait PullSurface: BaseSurface {
         pull_batch::BatchPullSurface::new(self, other)
     }
 
-    fn stream_join<Other, Key, ValSelf, ValOther>(
+    fn stream_join<Other, Key, ValSelf, L, Update>(
         self,
         other: Other,
-    ) -> pull_stream_join::StreamJoinPullSurface<Self, Other>
+    ) -> pull_stream_join::StreamJoinPullSurface<Self, Other, L, Update>
     where
         Self: Sized + PullSurface<ItemOut = (Key, ValSelf)>,
-        Other: PullSurface<ItemOut = (Key, ValOther)>,
+        Other: PullSurface<ItemOut = (Key, Update::Repr)>,
         Key: 'static + Eq + Hash + Clone,
         ValSelf: 'static + Clone,
-        ValOther: 'static + Clone,
+        Update: 'static + LatticeRepr,
+        L: 'static + LatticeRepr + Merge<Update>,
+        L::Repr: Clone,
 
         Other::InputHandoffs: Extend<Self::InputHandoffs>,
         <Other::InputHandoffs as Extend<Self::InputHandoffs>>::Extended: PortList<RECV>

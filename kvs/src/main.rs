@@ -1,6 +1,6 @@
 #![feature(never_type)]
 
-use std::{collections::HashMap, sync::Arc, time::Duration};
+use std::{collections::{HashMap, HashSet}, sync::Arc, time::Duration};
 
 use hydroflow::{
     builder::{
@@ -11,7 +11,11 @@ use hydroflow::{
     lang::{
         collections::Single,
         lattice::{
-            dom_pair::DomPairRepr, map_union::MapUnionRepr, ord::MaxRepr, LatticeRepr, Merge,
+            dom_pair::DomPairRepr,
+            map_union::MapUnionRepr,
+            ord::{Max, MaxRepr},
+            set_union::{SetUnionRepr, SetUnion},
+            LatticeRepr, Merge,
         },
         tag,
     },
@@ -46,7 +50,7 @@ where
     // A KV set request from a client.
     Set(K, V),
     // A set of data that I am responsible for, sent to me by another worker.
-    Batch((usize, u64), Vec<(K, (Timestamp, V))>),
+    Batch((usize, u64), Vec<(K, V)>),
 }
 
 unsafe impl<K, V> Send for Message<K, V>
@@ -120,6 +124,30 @@ fn owners<K: std::hash::Hash>(n: u64, _v: &K) -> Vec<usize> {
     (0..n as usize).collect()
 }
 
+// TODO(justin): this thing is hacky.
+#[derive(Debug, Copy, Clone)]
+struct PerQuantumPulser {
+    on: bool,
+}
+
+impl PerQuantumPulser {
+    fn new() -> Self {
+        PerQuantumPulser { on: true }
+    }
+}
+
+impl Iterator for PerQuantumPulser {
+    type Item = ();
+    fn next(&mut self) -> Option<()> {
+        self.on = !self.on;
+        if self.on {
+            None
+        } else {
+            Some(())
+        }
+    }
+}
+
 fn spawn_threads<K, V>(workers: u64) -> Vec<Sender<Message<K, V>>>
 where
     K: 'static + Clone + Eq + std::hash::Hash + Send + std::fmt::Debug,
@@ -146,6 +174,11 @@ where
                     }
                 });
 
+                let (reads_send, reads_recv) =
+                    hf.add_channel_input::<Option<K>, VecHandoff<K>>();
+
+                let _ = reads_send;
+
                 let (q_send, q_recv) =
                     hf.add_channel_input::<Option<Message<K, V>>, VecHandoff<Message<K, V>>>();
                 // Feed incoming messages into a Hydroflow channel.
@@ -159,44 +192,49 @@ where
                 });
 
                 // Make the ownership table. Everyone owns everything.
-                let ownership = (0..senders.len()).map(|i| ((), i));
+                let ownership = (0..senders.len()).map(|i| ((), Single(i)));
 
                 let (x_send, x_recv) =
-                    hf.make_edge::<VecHandoff<Message<K, V>>, Option<Message<K, V>>>();
+                    hf.make_edge::<VecHandoff<(usize, u64, Vec<(K, V)>)>, Option<(usize, u64, Vec<(K, V)>)>>();
                 let (y_send, y_recv) = hf.make_edge::<VecHandoff<(K, V)>, Option<(K, V)>>();
 
-                let data: <DataRepr<K, V> as LatticeRepr>::Repr = Default::default();
-
-                let clock: <ClockRepr as LatticeRepr>::Repr = Default::default();
+                // TODO(justin): this is wrong and bad, need to figure out how to do this properly.
+                // let clock: <ClockRepr as LatticeRepr>::Repr = Default::default();
+                // let clock = Arc::new(Mutex::new(clock));
 
                 // C.
                 hf.add_subgraph(
                     y_recv
                         .flatten()
-                        .map(|v| ((), v))
-                        .batch_with(z_recv.flatten().map(|t| ((), t)))
-                        .map(|((), batch, idx)| (batch, idx))
-                        // Now we need to coalesce everything in the batch.
-                        .flat_map(move |(batch, idx)| {
-                            // This sucks, because we're doing a mutation?
-                            <ClockRepr as Merge<ClockUpdateRepr>>::merge(
-                                &mut clock,
-                                Single((id, idx)),
-                            );
-                            for (k, v) in batch {
-                                <DataRepr<K, V> as Merge<UpdateRepr<K, V>>>::merge(
-                                    &mut data,
-                                    Single((k, (clock.clone(), v))),
-                                );
-                            }
-
-                            data.drain().map(|v| ((), v)).collect::<Vec<_>>()
+                        .map(|(k, v)| Single((k, v)))
+                        .batch_with::<_, MapUnionRepr<tag::HASH_MAP, K, MaxRepr<V>>, MapUnionRepr<tag::SINGLE, K, MaxRepr<V>>, _>(z_recv.flatten())
+                        .flat_map(|(epoch, batch)| {
+                            batch.into_iter().map(move |x| (epoch, x))
                         })
-                        .stream_join(IterPullSurface::new(ownership))
+                        // TODO(justin): have a real hasher here, right now have
+                        // exactly one bucket everyone gets written into.
+                        .map(|(epoch, kv)| {
+                            ((), (epoch, kv))
+                        })
+                        .stream_join::<_, _, _, SetUnionRepr<tag::VEC, usize>, SetUnionRepr<tag::SINGLE, usize>>(IterPullSurface::new(ownership))
+                        .flat_map(|((), (epoch, (k, v)), receiver)| {
+                            receiver.into_iter().map(move |i|
+                                Single(((i, epoch), Single((k.clone(), v.clone()))))
+                            )
+                        })
+                        .batch_with::<
+                            _,
+                            MapUnionRepr<tag::HASH_MAP, (usize, u64), SetUnionRepr<tag::VEC, (K, V)>>, 
+                            MapUnionRepr<tag::SINGLE, (usize, u64), SetUnionRepr<tag::SINGLE, (K, V)>>,
+                            _,
+                        >(IterPullSurface::new(PerQuantumPulser::new()))
+                        .map(|((), batch)| batch)
+                        .filter(|batch| !batch.is_empty())
+                        .flatten()
                         .pull_to_push()
-                        .for_each(move |((), (k, (clock, v)), sender_id)| {
-                            println!("sending with batch num {}: {:?}", batch_num, msgs);
-                            // senders[sender_id].send(Message::Batch((id, batch_num), msgs));
+                        .for_each(move |((receiver, epoch), batch)| {
+                            // TODO(justin): do we need to tag this with our current vector clock as well?
+                            senders[receiver].try_send(Message::Batch((id, epoch), batch)).unwrap();
                         }),
                 );
 
@@ -213,88 +251,32 @@ where
                                 }
                             })
                             .push_to(y_send),
-                        hf.start_tee().map(Some).push_to(x_send),
+                        hf.start_tee()
+                            .map(|msg| {
+                                if let Message::Batch((id, epoch), batch) = msg {
+                                    Some((id, epoch, batch))
+                                } else {
+                                    unreachable!()
+                                }
+                            })
+                            .push_to(x_send),
                     ),
                 );
 
                 // A.
-                hf.add_subgraph(x_recv.pull_to_push().flatten().for_each(|msg| {
-                    println!("I received a message: {:?}", msg);
-                }));
+                hf.add_subgraph(reads_recv.flatten().map(|k| (k, ())).stream_join::<_, _, _, MaxRepr<V>, MaxRepr<V>>(
+                    x_recv.flatten().flat_map(|(id, epoch, batch)| {
+                        println!("got batch: {:?} {:?} {:?}", id, epoch, batch);
+                        // TODO(justin): this doesn't do the clocks. I
+                        // think we need to do some weird join against a
+                        // singleton that I don't really understand yet.
+                        batch.into_iter()
+                    })).pull_to_push().for_each(|x| {
+                        println!("read: {:?}", x)
+                    })
+                );
 
                 hf.build().run_async().await.unwrap();
-
-                // let clock: <ClockRepr as LatticeRepr>::Repr = Default::default();
-                // let clock = Arc::new(Mutex::new(clock));
-                // let mut epoch = 0_u64;
-
-                // let current_updates: <DataRepr<K, V> as LatticeRepr>::Repr = Default::default();
-                // let current_updates = Arc::new(Mutex::new(current_updates));
-
-                // let data: <DataRepr<K, V> as LatticeRepr>::Repr = Default::default();
-                // let data = Arc::new(Mutex::new(data));
-
-                // let event_updates = current_updates.clone();
-
-                // let event_loop = tokio::spawn(async move {
-                //     while let Some(msg) = receiver.recv().await {
-                //         match msg {
-                //             Message::Set(k, v) => {
-                //                 let mut updates = event_updates.lock().await;
-                //                 <DataRepr<K, V> as Merge<UpdateRepr<K, V>>>::merge(
-                //                     &mut updates,
-                //                     Single((k, (clock.lock().await.clone(), v))),
-                //                 );
-                //             }
-                //             Message::Batch((from, epoch), mut batch) => {
-                //                 let mut clock = clock.lock().await;
-                //                 <ClockRepr as Merge<ClockUpdateRepr>>::merge(
-                //                     &mut clock,
-                //                     Single((from, epoch)),
-                //                 );
-                //                 for (k, v) in batch.drain(..) {
-                //                     let mut data = data.lock().await;
-                //                     <DataRepr<K, V> as Merge<UpdateRepr<K, V>>>::merge(
-                //                         &mut data,
-                //                         Single((k, v)),
-                //                     );
-                //                 }
-                //             }
-                //         }
-                //     }
-                // });
-
-                // let epoch_duration = Duration::from_millis(100);
-                // tokio::spawn(async move {
-                //     loop {
-                //         tokio::time::sleep(epoch_duration).await;
-                //         epoch += 1;
-                //         let my_clock = Single((id, epoch));
-                //         // let mut clock = clock.lock().await;
-                //         // <ClockRepr as Merge<ClockUpdateRepr>>::merge(&mut clock, Single((id, epoch)));
-                //         let mut batches: Vec<<BatchRepr<K, V> as LatticeRepr>::Repr> =
-                //             (0..workers).map(|_| Default::default()).collect();
-
-                //         for (k, (mut ts, v)) in current_updates.lock().await.drain() {
-                //             <ClockRepr as Merge<ClockUpdateRepr>>::merge(&mut ts, my_clock);
-                //             // TODO(justin): save a clone here.
-                //             for owner in owners(workers, &k) {
-                //                 <BatchRepr<K, V> as Merge<UpdateRepr<K, V>>>::merge(
-                //                     &mut batches[owner],
-                //                     Single((k.clone(), (ts.clone(), v.clone()))),
-                //                 );
-                //             }
-                //         }
-
-                //         // TODO(justin): do this in parallel?
-                //         // TODO(justin): reuse the memory by keeping the vecs around?
-                //         for (s, batch) in senders.iter().zip(batches.into_iter()) {
-                //             s.send(Message::Batch((id, epoch), batch)).await.unwrap();
-                //         }
-                //     }
-                // });
-
-                // event_loop.await.unwrap();
             })
         },
     )

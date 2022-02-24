@@ -1,19 +1,22 @@
 use super::{PullBuild, PullBuildBase};
 
 use std::hash::Hash;
+use std::marker::PhantomData;
 
 use crate::compiled::pull::{StreamJoin, StreamJoinState};
+use crate::lang::lattice::{LatticeRepr, Merge};
 use crate::scheduled::context::Context;
 use crate::scheduled::handoff::handoff_list::{PortList, PortListSplit};
 use crate::scheduled::port::RECV;
 use crate::scheduled::type_list::Extend;
 
-pub struct StreamJoinPullBuild<PrevBuf, PrevStream, Key, BufVal, StreamVal>
+pub struct StreamJoinPullBuild<PrevBuf, PrevStream, Key, L, Update, StreamVal>
 where
-    PrevBuf: PullBuild<ItemOut = (Key, BufVal)>,
+    PrevBuf: PullBuild<ItemOut = (Key, Update::Repr)>,
     PrevStream: PullBuild<ItemOut = (Key, StreamVal)>,
     Key: 'static + Eq,
-    BufVal: 'static,
+    L: 'static + LatticeRepr + Merge<Update>,
+    Update: 'static + LatticeRepr,
     StreamVal: 'static,
 
     PrevBuf::InputHandoffs: Extend<PrevStream::InputHandoffs>,
@@ -22,15 +25,17 @@ where
 {
     prev_a: PrevBuf,
     prev_b: PrevStream,
-    state: StreamJoinState<Key, BufVal, StreamVal>,
+    state: StreamJoinState<Key, L>,
+    _marker: PhantomData<Update>,
 }
-impl<PrevBuf, PrevStream, Key, BufVal, StreamVal>
-    StreamJoinPullBuild<PrevBuf, PrevStream, Key, BufVal, StreamVal>
+impl<PrevBuf, PrevStream, Key, L, Update, StreamVal>
+    StreamJoinPullBuild<PrevBuf, PrevStream, Key, L, Update, StreamVal>
 where
-    PrevBuf: PullBuild<ItemOut = (Key, BufVal)>,
+    PrevBuf: PullBuild<ItemOut = (Key, Update::Repr)>,
     PrevStream: PullBuild<ItemOut = (Key, StreamVal)>,
     Key: 'static + Eq + Hash,
-    BufVal: 'static,
+    L: 'static + LatticeRepr + Merge<Update>,
+    Update: 'static + LatticeRepr,
     StreamVal: 'static,
 
     PrevBuf::InputHandoffs: Extend<PrevStream::InputHandoffs>,
@@ -42,41 +47,47 @@ where
             prev_a,
             prev_b,
             state: Default::default(),
+            _marker: PhantomData,
         }
     }
 }
 
-impl<PrevBuf, PrevStream, Key, BufVal, StreamVal> PullBuildBase
-    for StreamJoinPullBuild<PrevBuf, PrevStream, Key, BufVal, StreamVal>
+impl<PrevBuf, PrevStream, Key, L, Update, StreamVal> PullBuildBase
+    for StreamJoinPullBuild<PrevBuf, PrevStream, Key, L, Update, StreamVal>
 where
-    PrevBuf: PullBuild<ItemOut = (Key, BufVal)>,
+    PrevBuf: PullBuild<ItemOut = (Key, Update::Repr)>,
     PrevStream: PullBuild<ItemOut = (Key, StreamVal)>,
     Key: 'static + Eq + Hash + Clone,
-    BufVal: 'static + Clone,
+    L: 'static + LatticeRepr + Merge<Update>,
+    L::Repr: Default,
+    Update: 'static + LatticeRepr,
     StreamVal: 'static + Clone,
 
     PrevBuf::InputHandoffs: Extend<PrevStream::InputHandoffs>,
     <PrevBuf::InputHandoffs as Extend<PrevStream::InputHandoffs>>::Extended: PortList<RECV>
         + PortListSplit<RECV, PrevBuf::InputHandoffs, Suffix = PrevStream::InputHandoffs>,
 {
-    type ItemOut = (Key, StreamVal, BufVal);
+    type ItemOut = (Key, StreamVal, L::Repr);
     type Build<'slf, 'hof> = StreamJoin<
         'slf,
         Key,
         PrevBuf::Build<'slf, 'hof>,
-        BufVal,
+        L,
+        Update,
         PrevStream::Build<'slf, 'hof>,
         StreamVal,
     >;
 }
 
-impl<PrevBuf, PrevStream, Key, BufVal, StreamVal> PullBuild
-    for StreamJoinPullBuild<PrevBuf, PrevStream, Key, BufVal, StreamVal>
+impl<PrevBuf, PrevStream, Key, L, Update, StreamVal> PullBuild
+    for StreamJoinPullBuild<PrevBuf, PrevStream, Key, L, Update, StreamVal>
 where
-    PrevBuf: PullBuild<ItemOut = (Key, BufVal)>,
+    PrevBuf: PullBuild<ItemOut = (Key, Update::Repr)>,
     PrevStream: PullBuild<ItemOut = (Key, StreamVal)>,
     Key: 'static + Eq + Hash + Clone,
-    BufVal: 'static + Clone,
+    L: 'static + LatticeRepr + Merge<Update>,
+    L::Repr: Default + Clone,
+    Update: 'static + LatticeRepr,
     StreamVal: 'static + Clone,
 
     PrevBuf::InputHandoffs: Extend<PrevStream::InputHandoffs>,
