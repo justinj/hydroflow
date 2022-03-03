@@ -10,7 +10,13 @@ use hydroflow::{
     },
     lang::{
         collections::Single,
-        lattice::{map_union::MapUnionRepr, ord::MaxRepr, set_union::SetUnionRepr},
+        lattice::{
+            dom_pair::DomPairRepr,
+            map_union::MapUnionRepr,
+            ord::{Max, MaxRepr},
+            set_union::SetUnionRepr,
+            LatticeRepr, Merge,
+        },
         tag,
     },
     scheduled::handoff::VecHandoff,
@@ -126,6 +132,12 @@ impl Iterator for PerQuantumPulser {
     }
 }
 
+type ClockRepr = MapUnionRepr<tag::HASH_MAP, usize, MaxRepr<u64>>;
+type ClockUpdateRepr = MapUnionRepr<tag::SINGLE, usize, MaxRepr<u64>>;
+
+type DataRepr<K, V> = MapUnionRepr<tag::HASH_MAP, K, DomPairRepr<ClockRepr, MaxRepr<V>>>;
+type DataUpdateRepr<K, V> = MapUnionRepr<tag::SINGLE, K, DomPairRepr<ClockUpdateRepr, MaxRepr<V>>>;
+
 fn spawn_threads<K, V>(workers: u64) -> Vec<Sender<Message<K, V>>>
 where
     K: 'static + Clone + Eq + std::hash::Hash + Send + std::fmt::Debug,
@@ -227,13 +239,14 @@ where
                     ),
                 );
 
+                let mut data: <MapUnionRepr<tag::HASH_MAP, K, DomPairRepr<ClockRepr, MaxRepr<V>>> as LatticeRepr>::Repr = Default::default();
+
                 hf.add_subgraph("read_handler", reads_recv.flatten().map(|k| (k, ())).stream_join::<_, _, _, MaxRepr<V>, MaxRepr<V>>(
                     x_recv.flatten().flat_map(|(id, epoch, batch)| {
-                        println!("got batch: {:?} {:?} {:?}", id, epoch, batch);
-                        // TODO(justin): this doesn't do the clocks. I
-                        // think we need to do some weird join against a
-                        // singleton that I don't really understand yet.
-                        batch.into_iter()
+                        for (k, v) in batch {
+                            <DataRepr<K, V> as Merge<DataUpdateRepr<K, V>>>::merge(&mut data,Single((k, (Single((id, epoch)), v))));
+                        }
+                        vec![]
                     })).pull_to_push().for_each(|x| {
                         println!("read: {:?}", x)
                     })
