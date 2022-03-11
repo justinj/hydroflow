@@ -151,7 +151,9 @@ impl Hydroflow {
     /// TODO(mingwei): Currently blockes forever, no notion of "completion."
     pub fn run(&mut self) -> Option<!> {
         loop {
+            println!("ticking");
             self.tick();
+            println!("receiving");
             self.recv_events()?;
         }
     }
